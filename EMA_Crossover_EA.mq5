@@ -24,6 +24,8 @@ input double   MaxDailyLossPercent = 10.0;  // Maximum daily loss (% of equity) 
 input int      MaxDailyTrades = 3;           // Maximum trades per day - LIMITED for small account
 input int      MaxConsecutiveLosses = 2;     // Max consecutive losses per day - STRICT LIMIT
 input bool     EnableKillSwitch = true;     // Enable global kill-switch
+input bool     RequirePositiveWinRate = true; // Only trade when win rate > loss rate
+input int      MinTradesForWinRate = 5;      // Minimum trades before checking win rate
 
 input group "=== Trading Strategy ==="
 input int      FastEMA = 12;                // Fast EMA period
@@ -71,9 +73,12 @@ double         initialEquity = 0;
 double         dailyProfit = 0;
 int            dailyTrades = 0;
 int            consecutiveLosses = 0;
+int            totalWins = 0;                // Total winning trades
+int            totalLosses = 0;              // Total losing trades
 datetime       lastTradeDate = 0;
 bool           tradingDisabled = false;     // Global kill-switch flag
 string         globalVarPrefix = "EA_Stats_"; // Prefix for GlobalVariables
+long           expertMagicNumber = 123456;    // EA magic number
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -81,7 +86,8 @@ string         globalVarPrefix = "EA_Stats_"; // Prefix for GlobalVariables
 int OnInit()
 {
    //--- Set trade parameters
-   trade.SetExpertMagicNumber(123456);
+   expertMagicNumber = 123456;
+   trade.SetExpertMagicNumber(expertMagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
    
    //--- Auto-detect broker's filling mode
@@ -127,6 +133,8 @@ int OnInit()
    dailyProfit = 0;
    dailyTrades = 0;
    consecutiveLosses = 0;
+   totalWins = 0;
+   totalLosses = 0;
    lastTradeDate = 0;
    tradingDisabled = false;
    
@@ -175,6 +183,17 @@ int OnInit()
    }
    Print("Max spread: ", MaxSpreadPips, " pips");
    Print("Kill-switch: ", EnableKillSwitch ? "ENABLED" : "DISABLED");
+   Print("Win rate requirement: ", RequirePositiveWinRate ? "ENABLED" : "DISABLED");
+   if(RequirePositiveWinRate)
+   {
+      Print("  - Minimum trades before check: ", MinTradesForWinRate);
+      Print("  - Current stats: ", totalWins, " wins, ", totalLosses, " losses");
+      if(totalWins + totalLosses > 0)
+      {
+         double winRate = ((double)totalWins / (double)(totalWins + totalLosses)) * 100.0;
+         Print("  - Current win rate: ", DoubleToString(winRate, 2), "%");
+      }
+   }
    Print("========================================");
    
    return(INIT_SUCCEEDED);
@@ -353,6 +372,13 @@ bool IsTradingAllowed()
    //--- Check daily trade limit
    if(dailyTrades >= MaxDailyTrades)
       return false;
+   
+   //--- Check win rate requirement (only trade when win rate > loss rate)
+   if(RequirePositiveWinRate && !IsWinRatePositive())
+   {
+      Print("Trading blocked: Win rate not positive. Wins: ", totalWins, ", Losses: ", totalLosses);
+      return false;
+   }
    
    return true;
 }
@@ -650,10 +676,14 @@ bool IsSymbolTradable()
    if(tradeMode == SYMBOL_TRADE_MODE_DISABLED)
       return false;
    
-   //--- Check if market is currently open for trading
-   long tradeModeEx = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE_EX);
-   if(tradeModeEx == SYMBOL_TRADE_MODE_EX_DISABLED)
-      return false;
+   //--- Check if symbol allows trading (both long and short)
+   if(tradeMode != SYMBOL_TRADE_MODE_FULL)
+   {
+      //--- For small account, we need full trading mode
+      //--- If only long or only short allowed, skip
+      if(tradeMode == SYMBOL_TRADE_MODE_LONGONLY || tradeMode == SYMBOL_TRADE_MODE_SHORTONLY)
+         return false;
+   }
    
    return true;
 }
@@ -663,7 +693,7 @@ bool IsSymbolTradable()
 //+------------------------------------------------------------------+
 void LoadDailyStatistics()
 {
-   string varName = globalVarPrefix + _Symbol + "_" + IntegerToString(trade.GetExpertMagicNumber());
+   string varName = globalVarPrefix + _Symbol + "_" + IntegerToString(expertMagicNumber);
    string dateStr = TimeToString(TimeCurrent(), TIME_DATE);
    string fullVarName = varName + "_" + dateStr;
    
@@ -686,6 +716,18 @@ void LoadDailyStatistics()
       if(tradingDisabled)
          Print("WARNING: Trading was disabled from previous session");
    }
+   
+   //--- Load lifetime win/loss statistics (not date-specific)
+   string lifetimeVarName = varName + "_Lifetime";
+   if(GlobalVariableCheck(lifetimeVarName + "_Wins"))
+   {
+      totalWins = (int)GlobalVariableGet(lifetimeVarName + "_Wins");
+   }
+   
+   if(GlobalVariableCheck(lifetimeVarName + "_Losses"))
+   {
+      totalLosses = (int)GlobalVariableGet(lifetimeVarName + "_Losses");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -693,7 +735,7 @@ void LoadDailyStatistics()
 //+------------------------------------------------------------------+
 void SaveDailyStatistics()
 {
-   string varName = globalVarPrefix + _Symbol + "_" + IntegerToString(trade.GetExpertMagicNumber());
+   string varName = globalVarPrefix + _Symbol + "_" + IntegerToString(expertMagicNumber);
    string dateStr = TimeToString(TimeCurrent(), TIME_DATE);
    string fullVarName = varName + "_" + dateStr;
    
@@ -708,6 +750,11 @@ void SaveDailyStatistics()
    GlobalVariableSetOnCondition(fullVarName + "_ConsecutiveLosses", consecutiveLosses, 0);
    GlobalVariableSetOnCondition(fullVarName + "_Disabled", tradingDisabled ? 1.0 : 0.0, 0);
    GlobalVariableSetOnCondition(fullVarName + "_DailyProfit", dailyProfit, 0);
+   
+   //--- Save lifetime win/loss statistics (persistent across days)
+   string lifetimeVarName = varName + "_Lifetime";
+   GlobalVariableSet(lifetimeVarName + "_Wins", totalWins);
+   GlobalVariableSet(lifetimeVarName + "_Losses", totalLosses);
 }
 
 //+------------------------------------------------------------------+
@@ -720,7 +767,7 @@ int CountOpenPositions()
    {
       if(position.SelectByIndex(i))
       {
-         if(position.Symbol() == _Symbol && position.Magic() == trade.GetExpertMagicNumber())
+         if(position.Symbol() == _Symbol && position.Magic() == expertMagicNumber)
             count++;
       }
    }
@@ -737,7 +784,7 @@ void ManageOpenPositions()
       if(!position.SelectByIndex(i))
          continue;
       
-      if(position.Symbol() != _Symbol || position.Magic() != trade.GetExpertMagicNumber())
+      if(position.Symbol() != _Symbol || position.Magic() != expertMagicNumber)
          continue;
       
       double positionOpenPrice = position.PriceOpen();
@@ -952,7 +999,7 @@ void CloseAllPositions()
    {
       if(position.SelectByIndex(i))
       {
-         if(position.Symbol() == _Symbol && position.Magic() == trade.GetExpertMagicNumber())
+         if(position.Symbol() == _Symbol && position.Magic() == expertMagicNumber)
          {
             trade.PositionClose(position.Ticket());
          }
@@ -976,19 +1023,26 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    if(!HistoryDealSelect(trans.deal))
       return;
    
-   if(!deal.Ticket(trans.deal))
+   //--- Get deal ticket to verify selection
+   ulong dealTicket = HistoryDealGetInteger(trans.deal, DEAL_TICKET);
+   if(dealTicket == 0)
       return;
    
    //--- Check if this is our EA's deal
-   if(deal.Symbol() != _Symbol || deal.Magic() != trade.GetExpertMagicNumber())
+   string dealSymbol = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
+   long dealMagic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+   
+   if(dealSymbol != _Symbol || dealMagic != expertMagicNumber)
       return;
    
    //--- Only process position closing deals
-   if(deal.Entry() == DEAL_ENTRY_OUT)
+   ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   if(dealEntry == DEAL_ENTRY_OUT)
    {
       //--- Check if this deal closed today
+      datetime dealTime = (datetime)HistoryDealGetInteger(trans.deal, DEAL_TIME);
       MqlDateTime dt;
-      TimeToStruct(deal.Time(), dt);
+      TimeToStruct(dealTime, dt);
       datetime dealDate = StringToTime(IntegerToString(dt.year) + "." + 
                                       IntegerToString(dt.mon) + "." + 
                                       IntegerToString(dt.day));
@@ -996,21 +1050,55 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
       if(dealDate == lastTradeDate)
       {
          //--- Update consecutive losses
-         double dealProfit = deal.Profit() + deal.Swap() + deal.Commission();
-         if(dealProfit < 0)
+         double dealProfit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+         double dealSwap = HistoryDealGetDouble(trans.deal, DEAL_SWAP);
+         double dealCommission = HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+         double totalProfit = dealProfit + dealSwap + dealCommission;
+         if(totalProfit < 0)
          {
             consecutiveLosses++;
-            Print("Consecutive losses: ", consecutiveLosses);
+            totalLosses++;
+            Print("Consecutive losses: ", consecutiveLosses, " | Total Losses: ", totalLosses);
          }
          else
          {
             consecutiveLosses = 0; // Reset on profit
+            totalWins++;
+            Print("Trade closed in profit. Total Wins: ", totalWins);
          }
          
          //--- Persist statistics after each closed trade
          SaveDailyStatistics();
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if win rate is positive (wins > losses)                   |
+//+------------------------------------------------------------------+
+bool IsWinRatePositive()
+{
+   //--- Need minimum trades before checking win rate
+   int totalTrades = totalWins + totalLosses;
+   if(totalTrades < MinTradesForWinRate)
+   {
+      //--- Allow trading if we don't have enough data yet
+      return true;
+   }
+   
+   //--- Calculate win rate percentage
+   double winRate = (totalTrades > 0) ? ((double)totalWins / (double)totalTrades) * 100.0 : 0.0;
+   double lossRate = (totalTrades > 0) ? ((double)totalLosses / (double)totalTrades) * 100.0 : 0.0;
+   
+   //--- Only trade when win rate > loss rate (i.e., win rate > 50%)
+   bool isPositive = (totalWins > totalLosses);
+   
+   if(!isPositive)
+   {
+      Print("Win rate check: ", DoubleToString(winRate, 2), "% wins vs ", DoubleToString(lossRate, 2), "% losses");
+   }
+   
+   return isPositive;
 }
 
 //+------------------------------------------------------------------+
