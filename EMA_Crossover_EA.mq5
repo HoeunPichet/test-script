@@ -15,14 +15,14 @@
 
 //--- Input Parameters
 input group "=== Risk Management ==="
-input double   RiskPercent = 2.0;           // Risk per trade (% of balance)
+input double   RiskPercent = 1.0;           // Risk per trade (% of balance) - LOW RISK for $50 account
 input double   StopLossPips = 50.0;         // Stop Loss (pips)
 input double   TakeProfitPips = 100.0;      // Take Profit (pips)
-input int      MaxOpenTrades = 3;           // Maximum open trades
-input double   MaxDailyLoss = 500.0;        // Maximum daily loss (account currency)
-input double   MaxDailyLossPercent = 5.0;   // Maximum daily loss (% of equity)
-input int      MaxDailyTrades = 10;         // Maximum trades per day
-input int      MaxConsecutiveLosses = 3;    // Max consecutive losses per day
+input int      MaxOpenTrades = 1;           // Maximum open trades - CONSERVATIVE for small account
+input double   MaxDailyLoss = 5.0;          // Maximum daily loss (account currency) - $5 max loss for $50 account
+input double   MaxDailyLossPercent = 10.0;  // Maximum daily loss (% of equity) - 10% max loss
+input int      MaxDailyTrades = 3;           // Maximum trades per day - LIMITED for small account
+input int      MaxConsecutiveLosses = 2;     // Max consecutive losses per day - STRICT LIMIT
 input bool     EnableKillSwitch = true;     // Enable global kill-switch
 
 input group "=== Trading Strategy ==="
@@ -41,13 +41,14 @@ input bool     EnableBreakEven = true;      // Enable Break-Even
 input double   BreakEvenPips = 20.0;        // Break-Even trigger (pips profit)
 input double   BreakEvenOffsetPips = 5.0;   // Break-Even offset from entry
 
-input group "=== Trading Hours ==="
-input int      TradingStartHour = 0;        // Trading start hour (0-23)
-input int      TradingEndHour = 23;         // Trading end hour (0-23)
-input bool     TradeOnFriday = true;        // Allow trading on Friday
+input group "=== Trading Hours (New York Time) ==="
+input bool     UseNewYorkTime = true;       // Use New York timezone for trading hours
+input int      TradingStartHour = 8;         // Trading start hour (NY time, 0-23) - 8 AM NY
+input int      TradingEndHour = 17;          // Trading end hour (NY time, 0-23) - 5 PM NY
+input bool     TradeOnFriday = false;       // Allow trading on Friday - DISABLED for safety
 
 input group "=== Safety Settings ==="
-input double   MaxSpreadPips = 5.0;         // Maximum spread (pips)
+input double   MaxSpreadPips = 3.0;         // Maximum spread (pips) - TIGHTER for small account
 input int      SlippagePoints = 10;         // Maximum slippage (points)
 
 //--- Global Variables
@@ -151,10 +152,30 @@ int OnInit()
       return(INIT_FAILED);
    }
    
+   Print("========================================");
    Print("EA initialized successfully");
+   Print("========================================");
+   Print("CONFIGURED FOR SMALL ACCOUNT ($50)");
    Print("Risk per trade: ", RiskPercent, "%");
    Print("Stop Loss: ", StopLossPips, " pips");
    Print("Take Profit: ", TakeProfitPips, " pips");
+   Print("Max open trades: ", MaxOpenTrades);
+   Print("Max daily loss: $", MaxDailyLoss, " (", MaxDailyLossPercent, "% of equity)");
+   Print("Max daily trades: ", MaxDailyTrades);
+   Print("Max consecutive losses: ", MaxConsecutiveLosses);
+   if(UseNewYorkTime)
+   {
+      datetime nyTime = GetNewYorkTime();
+      Print("Trading hours: ", TradingStartHour, ":00 - ", TradingEndHour, ":00 New York Time");
+      Print("Current NY time: ", TimeToString(nyTime, TIME_DATE|TIME_MINUTES));
+   }
+   else
+   {
+      Print("Trading hours: ", TradingStartHour, ":00 - ", TradingEndHour, ":00 Server Time");
+   }
+   Print("Max spread: ", MaxSpreadPips, " pips");
+   Print("Kill-switch: ", EnableKillSwitch ? "ENABLED" : "DISABLED");
+   Print("========================================");
    
    return(INIT_SUCCEEDED);
 }
@@ -237,6 +258,48 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Get New York time (EST/EDT)                                      |
+//+------------------------------------------------------------------+
+datetime GetNewYorkTime()
+{
+   if(!UseNewYorkTime)
+      return TimeCurrent();
+   
+   //--- Get server GMT offset in seconds
+   int serverGMTOffset = TimeGMTOffset();
+   
+   //--- New York timezone offset (EST = UTC-5, EDT = UTC-4)
+   //--- Simple approximation: EST = -18000 seconds, EDT = -14400 seconds
+   //--- For more accuracy, we check if DST is likely active (March-November)
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   
+   int nyOffset = -18000; // EST default (UTC-5)
+   
+   //--- Rough DST check: March to November (2nd Sunday in March to 1st Sunday in November)
+   //--- Simplified: if month is 4-10 (April-October), assume EDT
+   if(dt.mon >= 4 && dt.mon <= 10)
+      nyOffset = -14400; // EDT (UTC-4)
+   else if(dt.mon == 3) // March
+   {
+      //--- Check if after 2nd Sunday (rough approximation: after day 7)
+      if(dt.day >= 7)
+         nyOffset = -14400; // EDT
+   }
+   else if(dt.mon == 11) // November
+   {
+      //--- Check if before 1st Sunday (rough approximation: before day 7)
+      if(dt.day < 7)
+         nyOffset = -14400; // EDT
+   }
+   
+   //--- Convert server time to NY time
+   datetime nyTime = TimeCurrent() - serverGMTOffset + nyOffset;
+   
+   return nyTime;
+}
+
+//+------------------------------------------------------------------+
 //| Check if trading is allowed                                      |
 //+------------------------------------------------------------------+
 bool IsTradingAllowed()
@@ -255,9 +318,10 @@ bool IsTradingAllowed()
       return false;
    }
    
-   //--- Check trading hours
+   //--- Check trading hours (using New York time if enabled)
+   datetime checkTime = UseNewYorkTime ? GetNewYorkTime() : TimeCurrent();
    MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
+   TimeToStruct(checkTime, dt);
    
    if(!TradeOnFriday && dt.day_of_week == 5)
       return false;
@@ -849,8 +913,10 @@ void UpdateDailyProfit()
 //+------------------------------------------------------------------+
 void ResetDailyCounters()
 {
+   //--- Use New York time for day detection if enabled
+   datetime checkTime = UseNewYorkTime ? GetNewYorkTime() : TimeCurrent();
    MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
+   TimeToStruct(checkTime, dt);
    datetime currentDate = StringToTime(IntegerToString(dt.year) + "." + 
                                       IntegerToString(dt.mon) + "." + 
                                       IntegerToString(dt.day));
@@ -872,7 +938,8 @@ void ResetDailyCounters()
       if(EnableKillSwitch)
          tradingDisabled = false;
       
-      Print("Daily counters reset. New trading day started.");
+      string timezoneStr = UseNewYorkTime ? " (New York time)" : "";
+      Print("Daily counters reset. New trading day started", timezoneStr, ".");
    }
 }
 
