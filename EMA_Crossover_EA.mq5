@@ -50,7 +50,7 @@ input int      TradingEndHour = 17;          // Trading end hour (NY time, 0-23)
 input bool     TradeOnFriday = false;       // Allow trading on Friday - DISABLED for safety
 
 input group "=== Safety Settings ==="
-input double   MaxSpreadPips = 3.0;         // Maximum spread (pips) - TIGHTER for small account
+input double   MaxSpreadPips = 2.0;         // Maximum spread (pips) - TIGHT for small account
 input int      SlippagePoints = 10;         // Maximum slippage (points)
 
 //--- Global Variables
@@ -357,11 +357,12 @@ bool IsTradingAllowed()
          return false;
    }
    
-   //--- Check spread
+   //--- Check spread (with precision normalization)
    double spread = GetSpreadInPips();
+   spread = NormalizeDouble(spread, 2); // Round to 2 decimal places to avoid precision issues
    if(spread > MaxSpreadPips)
    {
-      Print("Trading blocked: Spread too high (", spread, " pips)");
+      Print("Trading blocked: Spread too high (", DoubleToString(spread, 2), " pips, limit: ", MaxSpreadPips, " pips)");
       return false;
    }
    
@@ -659,7 +660,15 @@ double GetSpreadInPips()
    double spread = ask - bid;
    double pipValue = GetPipValue();
    
-   return spread / pipValue;
+   if(pipValue <= 0)
+      return 999.0; // Return high value if pip calculation fails
+   
+   double spreadInPips = spread / pipValue;
+   
+   //--- Normalize to 2 decimal places to avoid floating point precision issues
+   spreadInPips = NormalizeDouble(spreadInPips, 2);
+   
+   return spreadInPips;
 }
 
 //+------------------------------------------------------------------+
