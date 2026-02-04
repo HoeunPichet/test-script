@@ -23,8 +23,8 @@ input int    ForceTP_Points         = 20000;
 
 // Risk & money management
 input double RiskPerTradePct        = 0.05;   // VERY SMALL for M1
-input int    MaxOpenPositions       = 5;      // REDUCED for better win rate focus
-input int    MaxTradesPerDay        = 50;     // REDUCED for quality over quantity
+input int    MaxOpenPositions       = 10;      // REDUCED for better win rate focus
+input int    MaxTradesPerDay        = 100;     // REDUCED for quality over quantity
 input int    MinBarsBetweenEntries  = 2;      // Minimum bars between entries (prevents overtrading)
 input bool   RequirePositiveWinRate = true;   // Only trade when win rate > loss rate
 input int    MinTradesForWinRate    = 10;     // Minimum trades before checking win rate

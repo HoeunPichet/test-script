@@ -1,0 +1,11 @@
+LotSizePer100=0.01
+EMAShort=9
+EMALong=21
+RSIPeriod=14
+RSIOverbought=70
+RSIOversold=30
+ATRPeriod=14
+SL_Multiplier=1.5
+TP_Multiplier=2.5
+StartHour=8
+EndHour=12
