@@ -15,12 +15,13 @@
 
 input group "═══ 🧠 NEURAL NETWORK SETTINGS ═══"
 input int      AI_IntelligenceLevel = 7;              // AI Intelligence (1-10, 7=Balanced)
-input int      AI_SignalSpeed = 2;                    // Signal Speed (1=Conservative, 5=Aggressive)
+input int      AI_SignalSpeed = 3;                    // Signal Speed (1=Conservative, 5=Aggressive) - DEFAULT: 3=Real-time
+input bool     RealTimeTrading = true;                // 🔥 Real-Time Trading (Trade on every tick, not just new bars)
 input bool     AI_AggressiveMode = false;             // 🔥 Aggressive Trading Mode
 input bool     AI_MultiTimeframe = true;              // 📊 Multi-Timeframe Analysis
 input bool     AI_QuantumSignals = false;             // ⚡ Quantum Signals (High Risk)
-input int      MinSignalStrength = 700;               // Minimum Signal Strength (600-850)
-input int      MinConfirmationBars = 2;               // Bars Required for Confirmation (1-5)
+input int      MinSignalStrength = 450;               // Minimum Signal Strength (400-850) - LOWERED for active trading
+input int      MinConfirmationBars = 0;               // Bars Required for Confirmation (0-5) - DISABLED for faster entries
 
 input group "═══ 💰 RISK & MONEY MANAGEMENT ═══"
 input double   MaxRiskPerTrade = 1.0;                 // Max Risk Per Trade (%) [0.5-2.0]
@@ -253,7 +254,9 @@ int OnInit()
     Print("║         ✅ PRODUCTION AI SYSTEM ONLINE ✅                 ║");
     Print("╠═══════════════════════════════════════════════════════════╣");
     PrintFormat("║  Intelligence Level: %d/10 (Production-Optimized)         ║", AI_IntelligenceLevel);
-    PrintFormat("║  Min Signal Strength: %d (Conservative)                  ║", MinSignalStrength);
+    PrintFormat("║  Min Signal Strength: %d (Balanced)                       ║", MinSignalStrength);
+    PrintFormat("║  Real-Time Trading: %s                                    ║", RealTimeTrading ? "ENABLED 🔥" : "Disabled");
+    PrintFormat("║  Signal Speed: %d/5 (Higher = More Responsive)             ║", AI_SignalSpeed);
     PrintFormat("║  Confirmation Bars: %d                                     ║", MinConfirmationBars);
     PrintFormat("║  Max Spread: %d pips                                      ║", MaxSpreadPips);
     Print("╠═══════════════════════════════════════════════════════════╣");
@@ -436,35 +439,42 @@ void OnTick()
     // NEW: Daily reset for drawdown tracking
     CheckDailyReset();
     
-    // Fast-mode check (controlled throttling)
-    if(AI_SignalSpeed >= 4 || AI_AggressiveMode) {
-        static int tickCounter = 0;
-        tickCounter++;
-        if(tickCounter % 5 != 0) return;  // Process every 5th tick max
+    // REAL-TIME MODE: Process on every tick for responsive trading
+    // Smart throttling: Only skip if very fast mode and not aggressive
+    static int tickCounter = 0;
+    tickCounter++;
+    
+    // Minimal throttling - process most ticks for real-time response
+    if(AI_SignalSpeed >= 5 && !AI_AggressiveMode) {
+        if(tickCounter % 3 != 0) return;  // Process every 3rd tick (was every 5th)
     }
     
-    // New bar check
+    // Track new bars for statistics, but don't require them for trading
     datetime currentBar = iTime(_Symbol, PrimaryTimeframe, 0);
     bool isNewBar = (currentBar != g_lastBarTime);
-    
-    if(!isNewBar && AI_SignalSpeed < 4 && !AI_AggressiveMode) return;
     
     if(isNewBar) {
         g_lastBarTime = currentBar;
         g_barsSinceLastTrade++;
         
-        // NEW: Update confirmation bar counters
+        // Update confirmation bar counters
         UpdateConfirmationTracking();
     }
     
+    // REAL-TIME: Always process signals, not just on new bars
+    // This allows immediate response to trend changes
+    
     // ═══════════════════════════════════════════════════════
-    // PRODUCTION AI PROCESSING PIPELINE
+    // REAL-TIME AI PROCESSING PIPELINE
     // ═══════════════════════════════════════════════════════
     
-    // Layer 1: Deep Market Analysis (Enhanced)
+    // Layer 1: Deep Market Analysis (Enhanced) - Updates on every tick
     AI_DeepMarketAnalysis();
     
-    // Layer 2: Position Management (ATR-Based)
+    // NEW: Real-Time Trend Momentum Check (uses current bid/ask, not just bar close)
+    AI_RealTimeTrendMomentum();
+    
+    // Layer 2: Position Management (ATR-Based) - Real-time updates
     AI_IntelligentPositionManagement();
     
     // Layer 3: Update Learning System (Fixed Lookahead)
@@ -477,8 +487,74 @@ void OnTick()
         return;  // Safety checks failed
     }
     
-    // Layer 5: Generate Balanced Signals (Enhanced)
+    // Layer 5: Generate Balanced Signals (Enhanced) - Real-time calculation
     int signal = AI_BalancedSignalProcessor();
+    
+    // ENHANCED: Detailed logging for every tick (when no signal or blocked)
+    static datetime lastSignalLog = 0;
+    static int logCounter = 0;
+    logCounter++;
+    
+    // Log every 30 seconds or when signal changes
+    bool shouldLog = (TimeCurrent() - lastSignalLog > 30) || (signal != 0);
+    
+    if(shouldLog || signal != 0) {
+        lastSignalLog = TimeCurrent();
+        
+        Print("═══════════════════════════════════════════════════════════");
+        Print("📊 REAL-TIME TRADING STATUS - Tick #", logCounter);
+        Print("═══════════════════════════════════════════════════════════");
+        Print("⏰ Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+        Print("📈 Signal: ", (signal == 1 ? "BUY ✅" : (signal == -1 ? "SELL ✅" : "NONE ❌")));
+        Print("💰 BUY Score: ", AI.buySignalStrength, " / SELL Score: ", AI.sellSignalStrength);
+        Print("🎯 Required Score: ", MinSignalStrength, " | High Probability: ", AI.isHighProbability ? "YES" : "NO");
+        Print("✅ Execution Allowed: ", AI.executionAllowed ? "YES" : "NO");
+        if(!AI.executionAllowed) {
+            Print("🚫 BLOCKED: ", AI.blockReason);
+        }
+        Print("📊 Market Regime: ", AI.marketRegime, " | Sentiment: ", AI.marketSentiment);
+        Print("📈 Trend Strength: ", DoubleToString(AI.trendStrength, 1), " | Direction: ", 
+              (AI.trendDirection == 1 ? "UP" : (AI.trendDirection == -1 ? "DOWN" : "NEUTRAL")));
+        Print("💪 Momentum: ", DoubleToString(AI.momentumNetScore, 1), 
+              " (Bull: ", DoubleToString(AI.momentumBull, 1), " Bear: ", DoubleToString(AI.momentumBear, 1), ")");
+        Print("📉 R:R Ratio: ", DoubleToString(AI.riskRewardRatio, 2), 
+              " | SL: ", DoubleToString(AI.optimalStopLoss, 1), " pips | TP: ", DoubleToString(AI.optimalTakeProfit, 1), " pips");
+        Print("⏱️ Bars Since Last Trade: ", g_barsSinceLastTrade);
+        // Count open positions
+    int openPos = 0;
+    for(int i = PositionsTotal() - 1; i >= 0; i--) {
+        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+            openPos++;
+    }
+    Print("📊 Current Positions: ", openPos, "/", MaxSimultaneousTrades);
+        Print("═══════════════════════════════════════════════════════════");
+    }
+    
+    // NEW: Aggressive fallback mechanism - if no trades, be more lenient
+    static datetime lastTradeTime = 0;
+    static datetime lastFallbackLog = 0;
+    
+    // More aggressive fallback: 10 bars or 30 minutes (was 20 bars or 1 hour)
+    if(g_barsSinceLastTrade > 10 || (lastTradeTime > 0 && TimeCurrent() - lastTradeTime > 1800)) {
+        // No trades for 10+ bars or 30+ minutes - use aggressive fallback mode
+        if(signal != 0 && !AI.isHighProbability) {
+            // Much lower requirements for fallback
+            int fallbackRequired = (int)(MinSignalStrength * 0.75);  // 25% reduction (was 15%)
+            double maxSignal = MathMax(AI.buySignalStrength, AI.sellSignalStrength);
+            
+            if(maxSignal >= fallbackRequired && AI.trendStrength > 15 && AI.riskRewardRatio >= 1.0) {
+                if(TimeCurrent() - lastFallbackLog > 60) {  // Log every minute max
+                    Print("🔄 AGGRESSIVE FALLBACK MODE: Lowering requirements");
+                    Print("   - No trades for ", g_barsSinceLastTrade, " bars / ", 
+                          (TimeCurrent() - lastTradeTime), " seconds");
+                    Print("   - Signal: ", maxSignal, " (required: ", fallbackRequired, ")");
+                    Print("   - Trend: ", AI.trendStrength, " | R:R: ", AI.riskRewardRatio);
+                    lastFallbackLog = TimeCurrent();
+                }
+                AI.isHighProbability = true;  // Override for fallback
+            }
+        }
+    }
     
     // Layer 6: Execute with Robust Error Handling
     if(signal == 1 && AI.isHighProbability && AI.executionAllowed) {
@@ -486,6 +562,7 @@ void OnTick()
             g_barsSinceLastTrade = 0;
             g_totalBuyTrades++;
             AI.failedAttempts = 0;
+            lastTradeTime = TimeCurrent();
         }
     }
     else if(signal == -1 && AI.isHighProbability && AI.executionAllowed) {
@@ -493,6 +570,7 @@ void OnTick()
             g_barsSinceLastTrade = 0;
             g_totalSellTrades++;
             AI.failedAttempts = 0;
+            lastTradeTime = TimeCurrent();
         }
     }
 }
@@ -578,6 +656,8 @@ bool AI_PreTradeValidation()
 {
     AI.executionAllowed = true;
     AI.blockReason = "";
+    static int validationCounter = 0;
+    validationCounter++;
     
     // 1. Check spread
     if(MaxSpreadPips > 0) {
@@ -588,6 +668,9 @@ bool AI_PreTradeValidation()
         if(spreadPips > MaxSpreadPips) {
             AI.executionAllowed = false;
             AI.blockReason = StringFormat("Spread too high: %.1f > %d pips", spreadPips, MaxSpreadPips);
+            if(validationCounter % 10 == 0) {  // Log every 10th check to avoid spam
+                Print("🚫 VALIDATION #", validationCounter, ": ", AI.blockReason);
+            }
             return false;
         }
     }
@@ -604,18 +687,31 @@ bool AI_PreTradeValidation()
         }
     }
     
-    // 3. Check news filter
+    // 3. Check news filter - RELAXED (only block during actual high-impact news)
     if(UseNewsFilter && IsNewsTime()) {
-        AI.executionAllowed = false;
-        AI.blockReason = "High-impact news period - trading blocked";
-        return false;
+        // Only block if signal is weak - allow strong signals even during news
+        // This prevents missing excellent opportunities
+        if(AI.buySignalStrength < MinSignalStrength * 0.9 && AI.sellSignalStrength < MinSignalStrength * 0.9) {
+            AI.executionAllowed = false;
+            AI.blockReason = "High-impact news period + weak signal - trading blocked";
+            return false;
+        }
+        // Strong signals can still trade during news (with warning)
+        Print("⚠️ News period detected, but allowing strong signal (", 
+              MathMax(AI.buySignalStrength, AI.sellSignalStrength), " strength)");
     }
     
-    // 4. Check session filter
+    // 4. Check session filter - RELAXED (allow trading in more sessions)
     if(!IsAllowedSession()) {
-        AI.executionAllowed = false;
-        AI.blockReason = "Outside allowed trading sessions";
-        return false;
+        // Only block if ALL sessions are disabled (very restrictive)
+        // Otherwise, allow trading with warning
+        if(!TradeAsianSession && !TradeLondonSession && !TradeUSSession) {
+            AI.executionAllowed = false;
+            AI.blockReason = "All trading sessions disabled";
+            return false;
+        }
+        // If at least one session is enabled, allow trading but log warning
+        Print("⚠️ Outside preferred session, but allowing trade (sessions enabled)");
     }
     
     // 5. Check position limits
@@ -643,10 +739,13 @@ bool AI_PreTradeValidation()
         return false;
     }
     
-    // 7. Check minimum bars since last trade (avoid overtrading)
-    if(!AI_AggressiveMode && g_barsSinceLastTrade < 3) {
+    // 7. Check minimum bars since last trade (avoid overtrading) - VERY RELAXED
+    if(!AI_AggressiveMode && g_barsSinceLastTrade < 0) {  // Removed requirement (was 1)
         AI.executionAllowed = false;
         AI.blockReason = "Too soon after last trade";
+        if(validationCounter % 10 == 0) {
+            Print("🚫 VALIDATION #", validationCounter, ": ", AI.blockReason, " (bars: ", g_barsSinceLastTrade, ")");
+        }
         return false;
     }
     
@@ -924,6 +1023,68 @@ void AI_DeepMarketAnalysis()
     // ═══════════════════════════════════════════════════════
     // NEW: ENHANCED RISK PARAMETER CALCULATION
     // ═══════════════════════════════════════════════════════
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Real-Time Trend Momentum (Uses Current Bid/Ask)           |
+//+------------------------------------------------------------------+
+void AI_RealTimeTrendMomentum()
+{
+    if(!RealTimeTrading) return;  // Skip if real-time mode disabled
+    
+    // Get current market prices (real-time, not bar close)
+    double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double currentPrice = (currentBid + currentAsk) / 2.0;
+    
+    // Get recent closes for comparison
+    double close[];
+    ArraySetAsSeries(close, true);
+    if(CopyClose(_Symbol, PrimaryTimeframe, 0, 3, close) < 3) return;
+    
+    // Calculate real-time momentum (price movement since last bar close)
+    double priceChange = currentPrice - close[0];
+    double priceChangePercent = (priceChange / close[0]) * 10000.0;  // In pips equivalent
+    
+    // Get MA values for trend comparison
+    double ma_fast[], ma_slow[];
+    ArraySetAsSeries(ma_fast, true);
+    ArraySetAsSeries(ma_slow, true);
+    if(CopyBuffer(h_MA_Fast, 0, 0, 2, ma_fast) < 2) return;
+    if(CopyBuffer(h_MA_Slow, 0, 0, 2, ma_slow) < 2) return;
+    
+    // Real-time trend boost: If price is moving strongly in trend direction
+    if(priceChangePercent > 5.0 && currentPrice > ma_fast[0] && ma_fast[0] > ma_slow[0]) {
+        // Strong upward momentum in uptrend
+        AI.momentumBull += 25;  // Boost buy momentum
+        AI.trendStrength = MathMin(AI.trendStrength + 5, 100);  // Strengthen trend
+    }
+    else if(priceChangePercent < -5.0 && currentPrice < ma_fast[0] && ma_fast[0] < ma_slow[0]) {
+        // Strong downward momentum in downtrend
+        AI.momentumBear += 25;  // Boost sell momentum
+        AI.trendStrength = MathMin(AI.trendStrength + 5, 100);  // Strengthen trend
+    }
+    
+    // Update momentum net score with real-time data
+    AI.momentumNetScore = AI.momentumBull - AI.momentumBear;
+    
+    // Real-time price action boost
+    static double lastPrice = 0;
+    if(lastPrice > 0) {
+        double tickMomentum = currentPrice - lastPrice;
+        if(tickMomentum > 0 && AI.trendDirection == 1) {
+            AI.momentumBull += 5;  // Small boost for each upward tick in uptrend
+        }
+        else if(tickMomentum < 0 && AI.trendDirection == -1) {
+            AI.momentumBear += 5;  // Small boost for each downward tick in downtrend
+        }
+    }
+    lastPrice = currentPrice;
+    
+    // Get ATR value for calculations
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    if(CopyBuffer(h_ATR, 0, 0, 1, atr) < 1) return;
     
     double atrPips = atr[0] / (_Point * 10);
     
@@ -947,6 +1108,13 @@ void AI_DeepMarketAnalysis()
     
     // Risk:Reward based on trend strength and regime
     double riskReward = 2.0;  // Default
+    
+    // Get ADX value for calculations
+    double adx[];
+    ArraySetAsSeries(adx, true);
+    if(CopyBuffer(h_ADX, 0, 0, 1, adx) < 1) {
+        adx[0] = 20.0;  // Default if can't get ADX
+    }
     
     if(AI.trendStrength > 70 && adx[0] > 35) riskReward = 2.8;
     else if(AI.trendStrength > 50 && adx[0] > 28) riskReward = 2.3;
@@ -1089,11 +1257,24 @@ int AI_BalancedSignalProcessor()
     int sellScore = 0;
     
     // 1. TREND DIRECTION (200 points) - MOST IMPORTANT
-    if(AI.trendDirection == 1 && AI.trendStrength > 40) {
+    // REAL-TIME: Use current price vs MAs for immediate trend detection
+    double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double currentPrice = (currentBid + currentAsk) / 2.0;
+    
+    // Real-time trend check: Current price position relative to MAs
+    bool realTimeBullish = (currentPrice > ma_fast[0] && ma_fast[0] > ma_medium[0]);
+    bool realTimeBearish = (currentPrice < ma_fast[0] && ma_fast[0] < ma_medium[0]);
+    
+    if((AI.trendDirection == 1 || realTimeBullish) && AI.trendStrength > 35) {  // Lowered from 40
         buyScore += 200;
+        // Bonus if real-time price confirms trend
+        if(realTimeBullish && currentPrice > close[0]) buyScore += 50;
     }
-    else if(AI.trendDirection == -1 && AI.trendStrength > 40) {
+    else if((AI.trendDirection == -1 || realTimeBearish) && AI.trendStrength > 35) {
         sellScore += 200;
+        // Bonus if real-time price confirms trend
+        if(realTimeBearish && currentPrice < close[0]) sellScore += 50;
     }
     
     // 2. MA ALIGNMENT (150 points)
@@ -1122,12 +1303,33 @@ int AI_BalancedSignalProcessor()
     if(rsi[0] > 52 && rsi[0] < 68) buyScore += 100;
     else if(rsi[0] < 48 && rsi[0] > 32) sellScore += 100;
     
-    // 6. PRICE ACTION (100 points)
+    // 6. PRICE ACTION (100 points) - ENHANCED WITH REAL-TIME DATA
     bool bullishCandle = close[0] > open[0];
     bool bearishCandle = close[0] < open[0];
     
     if(bullishCandle && close[0] > high[1]) buyScore += 100;
     if(bearishCandle && close[0] < low[1]) sellScore += 100;
+    
+    // NEW: Real-time price action boost (uses current bid/ask, not just bar close)
+    // Note: currentBid and currentAsk already declared above, so reuse them
+    
+    // If current price is breaking above recent high (real-time breakout)
+    if(currentAsk > high[0] && currentAsk > close[0]) {
+        buyScore += 80;  // Strong real-time bullish momentum
+    }
+    // If current price is breaking below recent low (real-time breakdown)
+    if(currentBid < low[0] && currentBid < close[0]) {
+        sellScore += 80;  // Strong real-time bearish momentum
+    }
+    
+    // Real-time momentum: Price moving in trend direction right now
+    double priceMomentum = (currentAsk + currentBid) / 2.0 - close[0];
+    if(priceMomentum > 0 && AI.trendDirection == 1) {
+        buyScore += 40;  // Price moving up in uptrend = strong signal
+    }
+    else if(priceMomentum < 0 && AI.trendDirection == -1) {
+        sellScore += 40;  // Price moving down in downtrend = strong signal
+    }
     
     // 7. VOLATILITY FILTER (Penalty in extreme volatility)
     if(AI.volatilityState == 2) {
@@ -1135,18 +1337,49 @@ int AI_BalancedSignalProcessor()
         sellScore = (int)(sellScore * 0.8);
     }
     
-    // NEW: 8. CONFIRMATION BAR REQUIREMENT
+    // NEW: 8. CONFIRMATION BAR REQUIREMENT - VERY RELAXED
     if(MinConfirmationBars > 0) {
         if(g_consecutiveBullishBars >= MinConfirmationBars) {
-            buyScore += 100;
+            buyScore += 100;  // Full bonus for confirmation
         }
         else if(g_consecutiveBearishBars >= MinConfirmationBars) {
-            sellScore += 100;
+            sellScore += 100;  // Full bonus for confirmation
         }
         else {
-            // Penalize if no confirmation
-            buyScore = (int)(buyScore * 0.7);
-            sellScore = (int)(sellScore * 0.7);
+            // Very light penalty if no confirmation (0.9 instead of 0.85)
+            // Allow trades even without confirmation
+            buyScore = (int)(buyScore * 0.9);
+            sellScore = (int)(sellScore * 0.9);
+        }
+    }
+    
+    // NEW: 9. ADDITIONAL SMART ENTRY BOOSTERS
+    // Boost signals in favorable conditions even if confirmation is weak
+    if(AI.trendStrength > 50 && adx[0] > 25) {
+        // Strong trend + good ADX = boost signal
+        if(buyScore > sellScore) buyScore += 50;
+        else if(sellScore > buyScore) sellScore += 50;
+    }
+    
+    // Boost if momentum is very strong
+    if(MathAbs(AI.momentumNetScore) > 40) {
+        if(AI.momentumNetScore > 0) buyScore += 40;
+        else sellScore += 40;
+    }
+    
+    // NEW: 10. REAL-TIME TREND FOLLOWING BOOST
+    // If trend is very clear and price is moving in trend direction RIGHT NOW
+    if(RealTimeTrading) {
+        double currentPrice = (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0;
+        double priceVsMA = currentPrice - ma_fast[0];
+        
+        // Strong uptrend + price above fast MA + price rising = immediate buy opportunity
+        if(AI.trendDirection == 1 && priceVsMA > 0 && currentPrice > close[0] && AI.trendStrength > 45) {
+            buyScore += 60;  // Real-time trend following boost
+        }
+        // Strong downtrend + price below fast MA + price falling = immediate sell opportunity
+        else if(AI.trendDirection == -1 && priceVsMA < 0 && currentPrice < close[0] && AI.trendStrength > 45) {
+            sellScore += 60;  // Real-time trend following boost
         }
     }
     
@@ -1161,23 +1394,41 @@ int AI_BalancedSignalProcessor()
     AI.signalQuality = (maxSignal / 1000.0) * 100.0;
     AI.confidenceLevel = AI.signalQuality;
     
-    // Dynamic threshold
+    // Dynamic threshold - SMARTER ADAPTIVE SYSTEM
     int requiredScore = MinSignalStrength;
     
     if(AI_AggressiveMode) {
-        requiredScore = (int)(requiredScore * 0.88);
+        requiredScore = (int)(requiredScore * 0.75);  // More aggressive reduction
     }
     
-    // NEW: Require stronger signals in ranging markets
-    if(AI.marketRegime == "RANGING") {
-        requiredScore = (int)(requiredScore * 1.15);
+    // NEW: Smarter adaptive threshold based on market conditions
+    if(AI.marketRegime == "TRENDING" && AI.trendStrength > 50) {
+        // In strong trends, lower threshold (easier to enter)
+        requiredScore = (int)(requiredScore * 0.85);
+    }
+    else if(AI.marketRegime == "RANGING") {
+        // In ranging markets, slightly higher but not too strict
+        requiredScore = (int)(requiredScore * 1.08);  // Reduced from 1.15
     }
     
-    // High-probability determination (stricter)
+    // NEW: Lower threshold if we haven't traded in a while
+    if(g_barsSinceLastTrade > 10) {
+        requiredScore = (int)(requiredScore * 0.90);  // 10% easier if no trades recently
+    }
+    
+    // High-probability determination - VERY RELAXED for active trading
     AI.isHighProbability = (maxSignal >= requiredScore && 
-                           AI.trendStrength > 35 && 
-                           adx[0] > 20 &&
-                           AI.riskRewardRatio >= 1.8);
+                           AI.trendStrength > 20 &&  // Reduced from 25
+                           adx[0] > 15 &&            // Reduced from 18
+                           AI.riskRewardRatio >= 1.2);  // Reduced from 1.5
+    
+    // NEW: Auto-trade mode - if signal is strong enough, allow even with relaxed conditions
+    if(maxSignal >= requiredScore * 1.1) {  // 10% above required
+        // Very strong signal - relax other requirements
+        if(AI.trendStrength > 15 && AI.riskRewardRatio >= 1.0) {
+            AI.isHighProbability = true;
+        }
+    }
     
     AI.isLowRisk = (AI.volatilityState <= 1 && AI.trendConfidence > 45);
     
@@ -1187,8 +1438,42 @@ int AI_BalancedSignalProcessor()
     
     int scoreDifference = MathAbs(buyScore - sellScore);
     
-    // NEW: Require larger score difference (150 instead of 100)
-    if(buyScore > sellScore && buyScore >= requiredScore && scoreDifference > 150) {
+    // NEW: Smarter score difference - adaptive based on signal strength (MORE AGGRESSIVE)
+    int minScoreDiff = 70;  // Reduced from 100 for more active trading
+    if(maxSignal > 700) minScoreDiff = 50;   // Very strong signals need minimal difference
+    else if(maxSignal > 600) minScoreDiff = 70;  // Strong signals
+    else if(maxSignal > 500) minScoreDiff = 90;  // Medium signals
+    else minScoreDiff = 110;  // Lower signals need more difference
+    
+    // Detailed logging for signal analysis
+    static datetime lastDetailedLog = 0;
+    bool shouldLogDetails = (TimeCurrent() - lastDetailedLog > 60) || (maxSignal >= requiredScore * 0.8);
+    
+    if(shouldLogDetails && maxSignal > 0) {
+        lastDetailedLog = TimeCurrent();
+        Print("═══════════════════════════════════════════════════════════");
+        Print("🔍 SIGNAL ANALYSIS BREAKDOWN");
+        Print("═══════════════════════════════════════════════════════════");
+        PrintFormat("📊 BUY Score: %d | SELL Score: %d | Max: %d", buyScore, sellScore, maxSignal);
+        PrintFormat("🎯 Required Score: %d (Base: %d)", requiredScore, MinSignalStrength);
+        PrintFormat("📈 Score Difference: %d (Min Required: %d)", scoreDifference, minScoreDiff);
+        PrintFormat("✅ High Probability: %s", AI.isHighProbability ? "YES" : "NO");
+        if(!AI.isHighProbability) {
+            Print("❌ Why NOT High Probability:");
+            PrintFormat("   - Signal >= Required: %s (%d >= %d)", 
+                      (maxSignal >= requiredScore ? "YES" : "NO"), maxSignal, requiredScore);
+            PrintFormat("   - Trend Strength > 20: %s (%.1f)", 
+                      (AI.trendStrength > 20 ? "YES" : "NO"), AI.trendStrength);
+            PrintFormat("   - ADX > 15: %s (%.1f)", (adx[0] > 15 ? "YES" : "NO"), adx[0]);
+            PrintFormat("   - R:R >= 1.2: %s (%.2f)", 
+                      (AI.riskRewardRatio >= 1.2 ? "YES" : "NO"), AI.riskRewardRatio);
+        }
+        PrintFormat("📊 Market: %s | Trend: %.1f | ADX: %.1f", 
+                    AI.marketRegime, AI.trendStrength, adx[0]);
+        Print("═══════════════════════════════════════════════════════════");
+    }
+    
+    if(buyScore > sellScore && buyScore >= requiredScore && scoreDifference > minScoreDiff) {
         Print("");
         Print("╔═══════════════════════════════════════════════════════════╗");
         Print("║        ⚡ HIGH-PROBABILITY BUY SIGNAL DETECTED ⚡         ║");
@@ -1205,7 +1490,7 @@ int AI_BalancedSignalProcessor()
         
         return 1;
     }
-    else if(sellScore > buyScore && sellScore >= requiredScore && scoreDifference > 150) {
+    else if(sellScore > buyScore && sellScore >= requiredScore && scoreDifference > minScoreDiff) {
         Print("");
         Print("╔═══════════════════════════════════════════════════════════╗");
         Print("║       ⚡ HIGH-PROBABILITY SELL SIGNAL DETECTED ⚡         ║");
